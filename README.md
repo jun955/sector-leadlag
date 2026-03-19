@@ -1,5 +1,5 @@
 ---
-title: JP-US Sector Lead-Lag Strategy
+title: 日米セクター リードラグ戦略
 emoji: 📈
 colorFrom: green
 colorTo: blue
