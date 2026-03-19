@@ -1,3 +1,9 @@
-altair
+yfinance
 pandas
+numpy
+scipy
+matplotlib
+statsmodels
+requests
+jupyter
 streamlit
