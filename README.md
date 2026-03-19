@@ -6,6 +6,7 @@ colorTo: blue
 sdk: docker
 app_file: app.py
 pinned: false
+short_description: 米国市場の終値から翌日の日本市場業種ETFのポジションを予測する研究用ツール
 ---
 
 # 日米セクター リードラグ戦略ダッシュボード
