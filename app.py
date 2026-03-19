@@ -278,26 +278,12 @@ st.sidebar.caption(
 # ---------------------------------------------------------------------------
 
 if not _data_files_exist():
-    st.info("初回起動: データをダウンロード中...（1〜2分かかります）")
-    with st.spinner("データ取得中..."):
-        try:
-            from src.data.fetch_jp_etf import fetch_jp_etf
-            from src.data.fetch_us_etf import fetch_us_etf
-            from src.data.fetch_ff_factors import fetch_ff_factors
-            from src.data.preprocess import preprocess_returns
-            from src.data.build_calendar import build_calendar
-
-            fetch_jp_etf()
-            fetch_us_etf()
-            fetch_ff_factors()
-            us_ret, jp_ret = preprocess_returns()
-            jp_cc = jp_ret.xs("cc", axis=1, level="ReturnType")
-            build_calendar(us_ret.index, jp_cc.index)
-            st.success("データ取得完了! ページを再読み込みします...")
-            st.rerun()
-        except Exception as e:
-            st.error(f"データ取得に失敗しました: {e}")
-            st.stop()
+    st.error(
+        "Required data files are missing. Run the scheduled HF update job "
+        "to regenerate data for this Space."
+    )
+    st.caption("Setup instructions: docs/hf-jobs-setup.md")
+    st.stop()
 
 # Load base data (cheap, cached)
 us_ret, jp_ret_full, date_map = load_data()
