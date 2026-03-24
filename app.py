@@ -65,7 +65,7 @@ def _data_files_exist() -> bool:
     return us_path.exists() and jp_path.exists() and map_path.exists()
 
 
-@st.cache_data(show_spinner="データを読み込み中...")
+@st.cache_data(show_spinner="データを読み込み中...", ttl=3600)
 def load_data():
     """Load pre-processed CSV data. Returns (us_ret, jp_ret_full, date_map)."""
     us_ret = pd.read_csv(
@@ -80,13 +80,13 @@ def load_data():
     return us_ret, jp_ret, date_map
 
 
-@st.cache_data(show_spinner="米国ETFデータを読み込み中...")
+@st.cache_data(show_spinner="米国ETFデータを読み込み中...", ttl=3600)
 def load_us_ohlc() -> pd.DataFrame:
     """Load US ETF OHLC from raw CSV."""
     return pd.read_csv(DATA_RAW / "us_etf_ohlc.csv", header=[0, 1], index_col=0, parse_dates=True)
 
 
-@st.cache_data(show_spinner="JP始値データを読み込み中...")
+@st.cache_data(show_spinner="JP始値データを読み込み中...", ttl=3600)
 def load_jp_open_prices():
     """Load JP ETF open prices from raw OHLC for share count calculation."""
     ohlc_path = DATA_RAW / "jp_etf_ohlc.csv"
@@ -102,7 +102,7 @@ def load_jp_open_prices():
     return pd.DataFrame(open_cols)
 
 
-@st.cache_data(show_spinner="Cfull/V0/C0/z-scoreを計算中...")
+@st.cache_data(show_spinner="Cfull/V0/C0/z-scoreを計算中...", ttl=3600)
 def compute_all_artifacts():
     """Compute Cfull, V0, C0, combined returns, z-scores (all heavy work)."""
     us_ret = pd.read_csv(
@@ -131,7 +131,7 @@ def compute_all_artifacts():
     return us_tickers_cfull, C0, combined, z_scores
 
 
-@st.cache_data(show_spinner="バックテストを実行中...")
+@st.cache_data(show_spinner="バックテストを実行中...", ttl=3600)
 def run_pca_sub_backtest():
     """Run PCA_SUB backtest and return daily returns Series."""
     us_ret = pd.read_csv(
@@ -312,9 +312,9 @@ if page == "本日のシグナル":
 
     # --- 設定行 ---
     jp_dates = pd.DatetimeIndex(date_map["jp_next_date"].sort_values().unique())
-    default_jp = find_nearest_jp_date(pd.Timestamp.today(), date_map, direction="backward")
-    if default_jp is None:
-        default_jp = jp_dates[-1]
+    # データに存在する最新の日付を常にデフォルトとして使用する
+    # （Streamlit Cloudのキャッシュ遅延でも最新データ日付を正しく表示するため）
+    default_jp = jp_dates[-1]
 
     col_date, col_capital = st.columns([1, 1])
     with col_date:
