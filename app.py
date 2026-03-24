@@ -270,7 +270,7 @@ st.sidebar.title("Alpha Signal")
 st.sidebar.caption("日米セクター クロスボーダー戦略")
 page = st.sidebar.radio(
     "ページ選択",
-    ["本日のシグナル", "バックテスト結果", "直近パフォーマンス", "📈 米国セクター動向"],
+    ["本日のシグナル", "バックテスト結果", "直近パフォーマンス", "📈 米国セクター動向", "🌙 夜間リスクチェック"],
 )
 st.sidebar.markdown("---")
 st.sidebar.caption(
@@ -834,3 +834,294 @@ elif page == "📈 米国セクター動向":
         hide_index=True,
         width="stretch",
     )
+
+# ===================================================================
+# Page 5: 夜間リスクチェック
+# ===================================================================
+elif page == "🌙 夜間リスクチェック":
+    import feedparser
+    import anthropic as _anthropic
+    from datetime import datetime, timedelta, timezone
+
+    st.header("🌙 夜間リスクチェック")
+    st.caption("オーバーナイトトレード判断用ダッシュボード（15:15までに確認）")
+
+    col_hd, col_btn = st.columns([5, 1])
+    with col_btn:
+        _refresh = st.button("🔄 今すぐ更新", use_container_width=True)
+
+    JST = timezone(timedelta(hours=9))
+    _now = datetime.now(JST)
+
+    # ------------------------------------------------------------------
+    # Helper: fetch RSS with fallback user-agent
+    # ------------------------------------------------------------------
+    def _fetch_rss(url: str) -> list:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            )
+        }
+        try:
+            import requests as _req
+            resp = _req.get(url, headers=headers, timeout=10)
+            d = feedparser.parse(resp.text)
+            return d.entries
+        except Exception:
+            return []
+
+    # ------------------------------------------------------------------
+    # Section 1: マクロイベントカレンダー
+    # ------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("📅 1. マクロイベントカレンダー")
+    st.caption("ソース: ZeroHedge / Reuters / Google News（今日〜7日以内）")
+
+    _HIGH_KEYWORDS = ["FOMC", "Federal Reserve", "日銀", "BOJ", "CPI", "nonfarm", "payroll",
+                      "雇用統計", "interest rate decision", "rate hike", "rate cut"]
+    _NOTABLE_KEYWORDS = ["inflation", "GDP", "unemployment", "treasury", "yield", "Jackson Hole",
+                         "monetary policy", "central bank", "economic outlook"]
+
+    _GNEWS_SOURCES = [
+        ("Google News(JP)", "https://news.google.com/rss/search?q=FOMC+OR+%E6%97%A5%E9%8A%80+OR+CPI+OR+%E9%9B%87%E7%94%A8%E7%B5%B1%E8%A8%88&hl=ja&gl=JP&ceid=JP:ja"),
+        ("Google News(EN)", "https://news.google.com/rss/search?q=FOMC+OR+Fed+OR+BOJ+OR+CPI+OR+payroll&hl=en&gl=US&ceid=US:en"),
+    ]
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _load_econ_calendar():
+        now_utc  = datetime.now(timezone.utc)
+        since    = now_utc - timedelta(days=7)   # 今日から7日前まで
+
+        seen = set()
+        rows = []
+        for source_name, url in _GNEWS_SOURCES:
+            entries = _fetch_rss(url)
+            for e in entries:
+                try:
+                    pub = datetime(*e.published_parsed[:6], tzinfo=timezone.utc)
+                except Exception:
+                    continue
+                # 7日以内の記事のみ
+                if pub < since or pub > now_utc + timedelta(hours=1):
+                    continue
+                title = e.get("title", "").strip()
+                link  = e.get("link", "")
+                if not title or title in seen:
+                    continue
+                seen.add(title)
+                is_high    = any(k.lower() in title.lower() for k in _HIGH_KEYWORDS)
+                is_notable = any(k.lower() in title.lower() for k in _NOTABLE_KEYWORDS)
+                if not (is_high or is_notable):
+                    continue
+                importance = "★★★" if is_high else "★★☆"
+                pub_jst = pub.astimezone(JST)
+                rows.append({
+                    "日時(JST)": pub_jst.strftime("%m/%d %H:%M"),
+                    "重要度": importance,
+                    "イベント": title,
+                    "ソース": source_name,
+                    "_link": link,
+                    "_high": is_high,
+                    "_pub": pub,
+                })
+
+        rows.sort(key=lambda r: r["_pub"], reverse=True)
+        return rows[:25]
+
+    with st.spinner("経済カレンダー取得中…"):
+        _cal_rows = _load_econ_calendar()
+
+    if _refresh:
+        st.cache_data.clear()
+        _cal_rows = _load_econ_calendar()
+
+    if not _cal_rows:
+        st.warning("該当するマクロイベントが見つかりませんでした。キーワード（FOMC / CPI / 雇用統計 など）に関連するニュースがない可能性があります。")
+    else:
+        for row in _cal_rows:
+            color = "#cc0000" if row["_high"] else "#cc7700"
+            bg    = "rgba(204,0,0,0.06)" if row["_high"] else "transparent"
+            st.markdown(
+                f"""<div style="padding:5px 10px;margin:3px 0;background:{bg};border-radius:4px;border-left:3px solid {color}">
+                <span style="color:{color};font-weight:bold">{row['重要度']}</span>
+                &nbsp;<span style="color:#333;font-size:0.85em">{row['日時(JST)']}</span>
+                &nbsp;<span style="color:#666;font-size:0.8em">[{row['ソース']}]</span>
+                &nbsp;<a href="{row['_link']}" target="_blank" style="color:#111111;text-decoration:none">{row['イベント']}</a>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+    # ------------------------------------------------------------------
+    # Section 2: 市場環境
+    # ------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("📊 2. 市場環境")
+
+    _MARKET_TICKERS = {
+        "VIX":          ("^VIX",     "恐怖指数"),
+        "ドル円":        ("USDJPY=X", "USD/JPY"),
+        "金":            ("GC=F",     "Gold先物"),
+        "原油WTI":       ("CL=F",     "WTI先物"),
+        "日経先物(CME)": ("NKD=F",    "CME Nikkei"),
+    }
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _load_market_data():
+        import yfinance as _yf
+        results = {}
+        for label, (ticker, desc) in _MARKET_TICKERS.items():
+            try:
+                t  = _yf.Ticker(ticker)
+                fi = t.fast_info
+                last = float(fi.last_price)
+
+                # 前日終値: 直近5日の日足から2番目の終値
+                hist = t.history(period="5d", interval="1d", auto_adjust=True)
+                if hist is None or len(hist) < 2:
+                    results[label] = None
+                    continue
+                prev = float(hist["Close"].iloc[-2])
+
+                chg   = last - prev
+                pct   = chg / prev * 100
+                arrow = "↑" if chg > 0 else ("↓" if chg < 0 else "→")
+                results[label] = {
+                    "desc": desc,
+                    "last": last,
+                    "chg":  chg,
+                    "pct":  pct,
+                    "arrow": arrow,
+                }
+            except Exception:
+                results[label] = None
+        return results
+
+    with st.spinner("市場データ取得中…"):
+        _mkt = _load_market_data()
+
+    _mkt_cols = st.columns(5)
+    for i, (label, data) in enumerate(_mkt.items()):
+        with _mkt_cols[i]:
+            if data is None:
+                st.metric(label, "取得失敗")
+                continue
+            chg_color = "#ff4444" if data["chg"] < 0 else "#44bb44"
+            arrow = data["arrow"]
+            st.markdown(
+                f"""<div style="border:1px solid #333;border-radius:8px;padding:10px;text-align:center">
+                <div style="font-size:0.8em;color:#aaa">{label}</div>
+                <div style="font-size:1.4em;font-weight:bold">{data['last']:.2f}</div>
+                <div style="color:{chg_color};font-size:0.9em">{arrow} {data['chg']:+.2f} ({data['pct']:+.1f}%)</div>
+                <div style="font-size:0.75em;color:#666">{data['desc']}</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+    # ------------------------------------------------------------------
+    # Section 3: 日本株関連ニュース
+    # ------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("🗾 3. 日本株関連ニュース")
+
+    @st.cache_data(ttl=900, show_spinner=False)
+    def _load_jp_news():
+        import urllib.parse
+        query = urllib.parse.quote("日本株 OR 日経平均 OR 東証")
+        url = f"https://news.google.com/rss/search?q={query}&hl=ja&gl=JP&ceid=JP:ja"
+        entries = _fetch_rss(url)
+        rows = []
+        for e in entries[:5]:
+            try:
+                pub = datetime(*e.published_parsed[:6], tzinfo=timezone.utc)
+                pub_jst = pub.astimezone(JST).strftime("%m/%d %H:%M")
+            except Exception:
+                pub_jst = "不明"
+            rows.append({
+                "time": pub_jst,
+                "title": e.get("title", ""),
+                "link": e.get("link", ""),
+            })
+        return rows
+
+    with st.spinner("ニュース取得中…"):
+        _jp_news = _load_jp_news()
+
+    if not _jp_news:
+        st.warning("ニュースを取得できませんでした。")
+    else:
+        for item in _jp_news:
+            st.markdown(
+                f'<div style="padding:5px 0;border-bottom:1px solid #222">'
+                f'<span style="color:#888;font-size:0.8em">{item["time"]}</span> '
+                f'<a href="{item["link"]}" target="_blank" style="color:#7cb8ff">{item["title"]}</a>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    # ------------------------------------------------------------------
+    # Section 4: AIコメント（Claude API）
+    # ------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("🤖 4. AIコメント（Claude）")
+
+    def _build_summary_prompt(cal, mkt, news) -> str:
+        lines = ["## マクロイベント（直近）"]
+        for r in cal[:5]:
+            lines.append(f"- [{r['重要度']}] {r['日時(JST)']} {r['イベント']}")
+
+        lines.append("\n## 市場環境")
+        for label, data in mkt.items():
+            if data:
+                lines.append(f"- {label}: {data['last']:.2f} ({data['arrow']}{data['pct']:+.1f}%)")
+
+        lines.append("\n## 日本株ニュース（直近）")
+        for item in news[:3]:
+            lines.append(f"- {item['time']} {item['title']}")
+
+        lines.append(
+            "\n以上の情報を踏まえて、今夜オーバーナイトポジションを持つ際の"
+            "注意点を3点、日本語で簡潔に述べてください。"
+        )
+        return "\n".join(lines)
+
+    try:
+        try:
+            _api_key = st.secrets["ANTHROPIC_API_KEY"]
+        except Exception:
+            import os
+            _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+
+        if not _api_key:
+            st.info("ANTHROPIC_API_KEY が設定されていません。Streamlit secrets または環境変数に設定してください。")
+        else:
+            _ai_btn_col, _ = st.columns([1, 3])
+            with _ai_btn_col:
+                _run_ai = st.button("💬 AIコメントを生成", use_container_width=True)
+
+            if _run_ai:
+                _prompt = _build_summary_prompt(_cal_rows, _mkt, _jp_news)
+                with st.spinner("Claude が分析中…"):
+                    _client = _anthropic.Anthropic(api_key=_api_key)
+                    _msg = _client.messages.create(
+                        model="claude-opus-4-6",
+                        max_tokens=512,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": _prompt.encode("utf-8").decode("utf-8"),
+                            }
+                        ],
+                    )
+                    _ai_text = _msg.content[0].text
+
+                st.markdown(
+                    f'<div style="background:#1a1f2e;border-left:4px solid #7cb8ff;'
+                    f'border-radius:4px;padding:16px;margin-top:8px;line-height:1.7">'
+                    f'{_ai_text.replace(chr(10), "<br>")}</div>',
+                    unsafe_allow_html=True,
+                )
+
+    except Exception as _e:
+        st.error(f"AI コメント生成エラー: {_e}")
