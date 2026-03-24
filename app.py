@@ -312,7 +312,7 @@ if page == "本日のシグナル":
     # --- 設定行 ---
     jp_dates = pd.DatetimeIndex(date_map["jp_next_date"].sort_values().unique())
     # データに存在する最新の日付を常にデフォルトとして使用する
-    # （Streamlit Cloudのキャッシュ遅延でも最新データ日付を正しく表示するため）
+    # （JP市場未クローズ時でもUS終値ベースのシグナルを表示するため jp_dates[-1] を使用）
     default_jp = jp_dates[-1]
 
     col_date, col_capital = st.columns([1, 1])
@@ -348,10 +348,18 @@ if page == "本日のシグナル":
         st.error(f"{jp_date.date()} に対応するUS日付が見つかりません。")
         st.stop()
 
+    jp_has_closing = jp_date in jp_oc.index
+
     st.caption(
         f"🇯🇵 日本市場: {jp_date.strftime('%Y-%m-%d')}　|　"
         f"🇺🇸 米国基準日: {us_date.strftime('%Y-%m-%d')}"
     )
+
+    if not jp_has_closing:
+        st.info(
+            f"📡 {jp_date.strftime('%Y-%m-%d')} の JP 終値データはまだ取得できていません（市場取引中または更新前）。"
+            "シグナルは米国終値から計算済みです。終値実績は市場クローズ後のデータ更新後に表示されます。"
+        )
 
     # --- シグナル生成 ---
     signal, weights, err = generate_signal(us_date, combined, z_scores, us_tickers_cfull, C0)
@@ -558,8 +566,8 @@ if page == "本日のシグナル":
             unsafe_allow_html=True,
         )
 
-    # --- 過去日付の場合: 実績表示 ---
-    if jp_date in jp_oc.index and pd.Timestamp.today().normalize() > jp_date:
+    # --- 過去日付の場合: 実績表示（JP終値データが存在する日のみ） ---
+    if jp_has_closing and pd.Timestamp.today().normalize() > jp_date:
         oc_ret = jp_oc.loc[jp_date, list(JP_TICKERS)]
         port_ret = (weights * oc_ret).sum()
         pnl_jpy = port_ret * capital
