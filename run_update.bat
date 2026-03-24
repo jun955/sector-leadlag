@@ -9,55 +9,57 @@ set GIT=git
 
 if not exist logs mkdir logs
 
-for /f "tokens=*" %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"') do set TODAY=%%d
-set LOGFILE=logs\update_%TODAY%.log
+for /f "tokens=*" %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd"') do set TODAY=%%d
+set LOGFILE=logs\update_%TODAY:.=%.log
 
 echo [%date% %time%] START >> "%LOGFILE%"
 
 rem ----------------------------------------------------------
 rem  Step 1: data update
 rem ----------------------------------------------------------
-echo [%time%] [1/4] data update ... >> "%LOGFILE%"
+echo [%time%] [1/3] data update ... >> "%LOGFILE%"
 
 "%PYTHON%" scripts\update_data.py --mode all >> "%LOGFILE%" 2>&1
 
 if %ERRORLEVEL% NEQ 0 (
-    echo [%date% %time%] ERROR: data update failed, exit code %ERRORLEVEL% >> "%LOGFILE%"
+    echo [%date% %time%] ERROR: data update failed >> "%LOGFILE%"
     exit /b 1
 )
 
-echo [%time%] [1/4] data update OK >> "%LOGFILE%"
+echo [%time%] [1/3] data update OK >> "%LOGFILE%"
 
 rem ----------------------------------------------------------
-rem  Step 2: git push to GitHub
+rem  Step 2: git add / commit / push
 rem ----------------------------------------------------------
-echo [%time%] [2/4] git push ... >> "%LOGFILE%"
+echo [%time%] [2/3] git push ... >> "%LOGFILE%"
 
-%GIT% add data/raw data/processed >> "%LOGFILE%" 2>&1
+%GIT% add data/ >> "%LOGFILE%" 2>&1
+
 %GIT% diff --cached --quiet
-if %ERRORLEVEL% NEQ 0 (
-    %GIT% commit -m "chore: refresh market data %TODAY%" >> "%LOGFILE%" 2>&1
+if !ERRORLEVEL! NEQ 0 (
+    %GIT% commit -m "data: auto update %TODAY%" >> "%LOGFILE%" 2>&1
     %GIT% push origin main >> "%LOGFILE%" 2>&1
-    if %ERRORLEVEL% NEQ 0 (
-        echo [%time%] [2/4] WARNING: git push failed >> "%LOGFILE%"
+    set PUSH_ERR=!ERRORLEVEL!
+    if !PUSH_ERR! NEQ 0 (
+        echo [%time%] [2/3] WARNING: git push failed >> "%LOGFILE%"
     ) else (
-        echo [%time%] [2/4] git push OK >> "%LOGFILE%"
+        echo [%time%] [2/3] git push OK >> "%LOGFILE%"
     )
 ) else (
-    echo [%time%] [2/4] no data changes, skip commit >> "%LOGFILE%"
+    echo [%time%] [2/3] no data changes, skip commit >> "%LOGFILE%"
 )
 
 rem ----------------------------------------------------------
 rem  Step 3: restart local Streamlit
 rem ----------------------------------------------------------
-echo [%time%] [3/4] restarting Streamlit ... >> "%LOGFILE%"
+echo [%time%] [3/3] restarting Streamlit ... >> "%LOGFILE%"
 
 taskkill /F /IM streamlit.exe >> "%LOGFILE%" 2>&1
 timeout /t 3 /nobreak > nul
 
 start "" /b "%STREAMLIT%" run app.py --server.headless true --server.port 8501
 
-echo [%time%] [3/4] Streamlit started (port 8501) >> "%LOGFILE%"
+echo [%time%] [3/3] Streamlit started (port 8501) >> "%LOGFILE%"
 echo [%date% %time%] DONE >> "%LOGFILE%"
 
 endlocal
