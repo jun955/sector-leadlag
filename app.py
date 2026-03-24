@@ -13,6 +13,14 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 
+import matplotlib.font_manager as _fm
+_JP_FONT_CANDIDATES = ["Meiryo", "MS Gothic", "MS PGothic", "Yu Gothic", "IPAexGothic"]
+_available_fonts = {f.name for f in _fm.fontManager.ttflist}
+for _f in _JP_FONT_CANDIDATES:
+    if _f in _available_fonts:
+        matplotlib.rcParams["font.family"] = _f
+        break
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -47,7 +55,7 @@ from src.evaluation.metrics import compute_metrics
 # Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="日米セクター リードラグ戦略",
+    page_title="Alpha Signal｜日米セクター クロスボーダー戦略",
     layout="wide",
 )
 
@@ -76,6 +84,12 @@ def load_data():
         DATA_PROCESSED / "us_jp_date_map.csv", parse_dates=["us_date", "jp_next_date"],
     )
     return us_ret, jp_ret, date_map
+
+
+@st.cache_data(show_spinner="米国ETFデータを読み込み中...")
+def load_us_ohlc() -> pd.DataFrame:
+    """Load US ETF OHLC from raw CSV."""
+    return pd.read_csv(DATA_RAW / "us_etf_ohlc.csv", header=[0, 1], index_col=0, parse_dates=True)
 
 
 @st.cache_data(show_spinner="JP始値データを読み込み中...")
@@ -258,10 +272,11 @@ def generate_signal(us_date, combined, z_scores, us_tickers_cfull, C0):
 # Navigation
 # ---------------------------------------------------------------------------
 
-st.sidebar.title("日米セクター リードラグ戦略")
+st.sidebar.title("Alpha Signal")
+st.sidebar.caption("日米セクター クロスボーダー戦略")
 page = st.sidebar.radio(
     "ページ選択",
-    ["本日のシグナル", "バックテスト結果", "直近パフォーマンス"],
+    ["本日のシグナル", "バックテスト結果", "直近パフォーマンス", "📈 米国セクター動向"],
 )
 st.sidebar.markdown("---")
 st.sidebar.caption(
@@ -295,12 +310,13 @@ jp_oc = jp_ret_full.xs("oc", axis=1, level="ReturnType")
 # Page 1: Today's Signal
 # ===================================================================
 if page == "本日のシグナル":
-    st.header("本日のシグナル (PCA SUB)")
+    st.header("📊 本日のシグナル")
 
     # Compute heavy artifacts (cached)
     us_tickers_cfull, C0, combined, z_scores = compute_all_artifacts()
+    jp_open_prices = load_jp_open_prices()
 
-    # Date picker
+    # --- 設定行 ---
     jp_dates = pd.DatetimeIndex(date_map["jp_next_date"].sort_values().unique())
     default_jp = find_nearest_jp_date(pd.Timestamp.today(), date_map, direction="backward")
     if default_jp is None:
@@ -319,19 +335,18 @@ if page == "本日のシグナル":
             "投資金額（円）",
             value=5_000_000,
             min_value=100_000,
-            step=1_000_000,
+            step=500_000,
             format="%d",
         )
 
+    # --- 日付解決 ---
     target_ts = pd.Timestamp(selected_date)
     jp_date = find_nearest_jp_date(target_ts, date_map, direction="backward")
     if jp_date is None:
         jp_date = find_nearest_jp_date(target_ts, date_map, direction="forward")
-
     if jp_date is None:
         st.error("対応する営業日が見つかりません。")
         st.stop()
-
     if jp_date.date() != selected_date:
         st.info(f"{selected_date} は営業日ではありません。直近の営業日 {jp_date.date()} を使用します。")
 
@@ -340,109 +355,236 @@ if page == "本日のシグナル":
         st.error(f"{jp_date.date()} に対応するUS日付が見つかりません。")
         st.stop()
 
-    st.markdown(
-        f"**日本市場日付:** {jp_date.strftime('%Y-%m-%d')} |"
-        f"**米国基準日:** {us_date.strftime('%Y-%m-%d')}"
+    st.caption(
+        f"🇯🇵 日本市場: {jp_date.strftime('%Y-%m-%d')}　|　"
+        f"🇺🇸 米国基準日: {us_date.strftime('%Y-%m-%d')}"
     )
 
-    # Generate signal
+    # --- シグナル生成 ---
     signal, weights, err = generate_signal(us_date, combined, z_scores, us_tickers_cfull, C0)
     if err:
         st.error(err)
         st.stop()
 
-    # Build display table
-    rows = []
-    jp_open_prices = load_jp_open_prices()
+    # シグナルを [-1, +1] に正規化
+    sig_max = signal.abs().max()
+    norm_signal = signal / sig_max if sig_max > 0 else signal
 
-    for ticker in signal.sort_values(ascending=False).index:
-        w = weights[ticker]
-        if w > 0:
-            side = "LONG"
-        elif w < 0:
-            side = "SHORT"
-        else:
-            side = "-"
+    # ロング TOP2 / ショート TOP2
+    long_series = signal[weights > 0].nlargest(2)
+    short_series = signal[weights < 0].nsmallest(2)
 
-        name = JP_TICKER_NAMES.get(ticker, "")
-        sig_val = signal[ticker]
-        target_jpy = abs(w) * capital  # 目標ポジション金額
+    # ランクに応じた ★ 表示
+    RANK_STARS = {1: "★★★", 2: "★★"}
 
-        # ETFは1口単位で売買可能（個別株の100株単位とは異なる）
-        shares_str = ""
-        actual_jpy_str = ""
-        if w != 0 and jp_open_prices is not None and ticker in jp_open_prices.columns:
-            if jp_date in jp_open_prices.index:
-                open_price = jp_open_prices.loc[jp_date, ticker]
-                if pd.notna(open_price) and open_price > 0:
-                    shares = max(1, int(target_jpy / open_price))
-                    actual_jpy = shares * open_price
-                    shares_str = f"{shares:,}"
-                    actual_jpy_str = f"{actual_jpy:,.0f}"
+    # 口数と実金額を計算
+    def _shares_info(ticker: str, weight_val: float):
+        target_jpy = abs(weight_val) * capital
+        shares_label = "—"
+        if (
+            jp_open_prices is not None
+            and ticker in jp_open_prices.columns
+            and jp_date in jp_open_prices.index
+        ):
+            open_price = jp_open_prices.loc[jp_date, ticker]
+            if pd.notna(open_price) and open_price > 0:
+                shares = max(1, int(target_jpy / open_price))
+                shares_label = f"{shares:,} 口"
+        return target_jpy, shares_label
 
-        rows.append({
-            "ティッカー": ticker,
-            "セクター名": name,
-            "サイド": side,
-            "シグナル": round(sig_val, 4),
-            "ウェイト": round(w, 4),
-            "目標金額(円)": f"{target_jpy:,.0f}" if w != 0 else "",
-            "株数": shares_str,
-            "実金額(円)": actual_jpy_str,
-        })
+    # ランク1カード（大・グラデーション背景）
+    def _card_rank1(ticker: str, rank: int, weight_val: float, grad: str, label: str):
+        name = JP_TICKER_NAMES.get(ticker, ticker)
+        nv = norm_signal[ticker]
+        sign = "+" if nv >= 0 else ""
+        stars = RANK_STARS.get(rank, "★")
+        st.markdown(
+            f"""
+            <div style="
+                background:{grad};
+                border-radius:18px;
+                padding:30px 20px 28px;
+                color:white;
+                text-align:center;
+                box-shadow:0 6px 24px rgba(0,0,0,0.25);
+                margin-bottom:14px;
+            ">
+                <div style="font-size:12px;opacity:.8;letter-spacing:2px;margin-bottom:6px;">{label}</div>
+                <div style="font-size:40px;font-weight:900;line-height:1.2;margin-bottom:12px;">{name}</div>
+                <div style="font-size:30px;letter-spacing:5px;margin-bottom:8px;">{stars}</div>
+                <div style="font-size:26px;font-weight:bold;">{sign}{nv:.2f}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    df_display = pd.DataFrame(rows)
+    # ランク2カード（小・枠線スタイル）
+    def _card_rank2(ticker: str, rank: int, weight_val: float, border: str, fg: str, bg: str, label: str):
+        name = JP_TICKER_NAMES.get(ticker, ticker)
+        nv = norm_signal[ticker]
+        sign = "+" if nv >= 0 else ""
+        stars = RANK_STARS.get(rank, "★")
+        st.markdown(
+            f"""
+            <div style="
+                background:{bg};
+                border:2px solid {border};
+                border-radius:14px;
+                padding:20px 16px 20px;
+                text-align:center;
+                margin-bottom:14px;
+            ">
+                <div style="font-size:11px;color:{fg};opacity:.7;letter-spacing:2px;margin-bottom:4px;">{label}</div>
+                <div style="font-size:28px;font-weight:800;color:{fg};line-height:1.2;margin-bottom:10px;">{name}</div>
+                <div style="font-size:22px;color:{border};letter-spacing:4px;margin-bottom:6px;">{stars}</div>
+                <div style="font-size:20px;font-weight:bold;color:{fg};">{sign}{nv:.2f}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    # Style the side column (use .map for pandas >= 2.1)
-    def style_side(val):
-        if val == "LONG":
-            return "color: #2ca02c; font-weight: bold"
-        elif val == "SHORT":
-            return "color: #d62728; font-weight: bold"
-        return ""
+    # --- 2列レイアウト: 左=ロング / 右=ショート ---
+    st.markdown("---")
+    col_long, col_short = st.columns(2)
 
-    styled = df_display.style.map(style_side, subset=["サイド"])
-    st.dataframe(
-        styled,
-        width="stretch",
-        hide_index=True,
-        height=35 * len(df_display) + 38,
-    )
+    with col_long:
+        st.markdown("### 🟢 買い（ロング）")
+        tickers_l = list(long_series.index)
+        if len(tickers_l) >= 1:
+            _card_rank1(
+                tickers_l[0], 1, weights[tickers_l[0]],
+                "linear-gradient(135deg,#1a7a2e,#38c446)",
+                "🏆  No.1  LONG",
+            )
+        if len(tickers_l) >= 2:
+            _card_rank2(
+                tickers_l[1], 2, weights[tickers_l[1]],
+                "#2ca02c", "#155a20", "#e8f5e9",
+                "No.2  LONG",
+            )
+
+    with col_short:
+        st.markdown("### 🔴 売り（ショート）")
+        tickers_s = list(short_series.index)
+        if len(tickers_s) >= 1:
+            _card_rank1(
+                tickers_s[0], 1, weights[tickers_s[0]],
+                "linear-gradient(135deg,#8b0000,#d62728)",
+                "🏆  No.1  SHORT",
+            )
+        if len(tickers_s) >= 2:
+            _card_rank2(
+                tickers_s[1], 2, weights[tickers_s[1]],
+                "#d62728", "#7a0000", "#fff0f0",
+                "No.2  SHORT",
+            )
+
     st.caption("※ TOPIX-17業種ETFは1口単位で売買可能（個別株の100株単位とは異なります）")
 
-    # Summary
-    long_count = (weights > 0).sum()
-    short_count = (weights < 0).sum()
-    st.markdown(
-        f"**ロング {long_count}銘柄** / **ショート {short_count}銘柄** / "
-        f"計 {len(weights)}銘柄 |"
-        f"グロスエクスポージャー: {weights.abs().sum():.1f} |"
-        f"ネットエクスポージャー: {weights.sum():.4f}"
+    # --- 全セクター シグナル一覧 ---
+    st.markdown("---")
+    st.markdown("#### 全セクター シグナル一覧")
+
+    # ★ の決定（全銘柄スケールで相対判定）
+    def _stars_full(norm_val: float) -> str:
+        v = abs(norm_val)
+        if v >= 0.7:
+            return "★★★"
+        elif v >= 0.4:
+            return "★★"
+        return "★"
+
+    # 1行分のHTML生成
+    def _row_html(rank: int, ticker: str, norm_val: float, is_top2: bool, is_long: bool) -> str:
+        name = JP_TICKER_NAMES.get(ticker, ticker)
+        sign = "+" if norm_val >= 0 else ""
+        stars = _stars_full(norm_val)
+        star_color = "#2ca02c" if is_long else "#d62728"
+        text_color = "#155a20" if is_long else "#7a0000"
+        bg = ("#d4edda" if is_long else "#f8d7da") if is_top2 else "transparent"
+        weight = "700" if is_top2 else "400"
+        return (
+            f'<div style="display:flex;align-items:center;padding:6px 10px;'
+            f'background:{bg};border-radius:6px;margin-bottom:3px;gap:6px;">'
+            f'<span style="font-size:11px;color:#999;width:26px;text-align:right;">{rank}位</span>'
+            f'<span style="font-size:14px;font-weight:{weight};color:{text_color};flex:1;">{name}</span>'
+            f'<span style="font-size:14px;font-weight:bold;color:{text_color};width:50px;text-align:right;">'
+            f'{sign}{norm_val:.2f}</span>'
+            f'<span style="font-size:13px;color:{star_color};width:46px;text-align:center;">{stars}</span>'
+            f'</div>'
+        )
+
+    # ロング候補（シグナル強い順）
+    long_all = signal[weights > 0].sort_values(ascending=False)
+    long_top2_set = set(list(long_series.index))
+    long_html = "".join(
+        _row_html(i + 1, tk, norm_signal[tk], tk in long_top2_set, is_long=True)
+        for i, tk in enumerate(long_all.index)
     )
 
-    # Actual P&L if date is in the past
-    if jp_date in jp_oc.index:
+    # ショート候補（シグナル強い順 = 最も負の値が1位）
+    short_all = signal[weights < 0].sort_values(ascending=True)
+    short_top2_set = set(list(short_series.index))
+    short_html = "".join(
+        _row_html(i + 1, tk, norm_signal[tk], tk in short_top2_set, is_long=False)
+        for i, tk in enumerate(short_all.index)
+    )
+
+    col_ll, col_ss = st.columns(2)
+    with col_ll:
+        st.markdown(
+            f'<div style="font-size:14px;font-weight:bold;color:#1a7a2e;margin-bottom:8px;">'
+            f'🟢 ロング候補（強い順）</div>{long_html}',
+            unsafe_allow_html=True,
+        )
+    with col_ss:
+        st.markdown(
+            f'<div style="font-size:14px;font-weight:bold;color:#8b0000;margin-bottom:8px;">'
+            f'🔴 ショート候補（強い順）</div>{short_html}',
+            unsafe_allow_html=True,
+        )
+
+    # 中立（ウェイト=0）セクター
+    neutral_tickers = [tk for tk in signal.index if weights[tk] == 0]
+    if neutral_tickers:
+        neutral_sorted = signal[neutral_tickers].abs().sort_values(ascending=False).index
+        neutral_rows = "".join(
+            f'<span style="display:inline-flex;align-items:center;gap:6px;'
+            f'padding:4px 10px;border-radius:6px;background:#f5f5f5;margin:3px;">'
+            f'<span style="font-size:13px;color:#555;">{JP_TICKER_NAMES.get(tk, tk)}</span>'
+            f'<span style="font-size:12px;color:#888;font-weight:bold;">'
+            f'{"+" if norm_signal[tk] >= 0 else ""}{norm_signal[tk]:.2f}</span>'
+            f'</span>'
+            for tk in neutral_sorted
+        )
+        st.markdown(
+            f'<div style="margin-top:14px;">'
+            f'<div style="font-size:14px;font-weight:bold;color:#666;margin-bottom:8px;">⚪ 中立（今日は見送り）</div>'
+            f'<div style="display:flex;flex-wrap:wrap;gap:2px;">{neutral_rows}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # --- 過去日付の場合: 実績表示 ---
+    if jp_date in jp_oc.index and pd.Timestamp.today().normalize() > jp_date:
         oc_ret = jp_oc.loc[jp_date, list(JP_TICKERS)]
         port_ret = (weights * oc_ret).sum()
-
-        if pd.Timestamp.today().normalize() > jp_date:
-            st.markdown("---")
-            st.subheader("実績（始値→終値）")
-
-            pnl_jpy = port_ret * capital
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("ポートフォリオリターン", f"{port_ret * 100:+.4f}%")
-            with col2:
-                st.metric("損益（円）", f"{pnl_jpy:+,.0f}")
-            with col3:
-                individual_pnl = weights * oc_ret
-                best_ticker = individual_pnl.idxmax()
-                st.metric(
-                    "最大寄与",
-                    f"{JP_TICKER_NAMES.get(best_ticker, best_ticker)}",
-                    f"{individual_pnl[best_ticker] * 100:+.4f}%",
-                )
+        pnl_jpy = port_ret * capital
+        st.markdown("---")
+        st.subheader("実績（始値→終値）")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("ポートフォリオリターン", f"{port_ret * 100:+.4f}%")
+        with col2:
+            st.metric("損益（円）", f"{pnl_jpy:+,.0f}")
+        with col3:
+            individual_pnl = weights * oc_ret
+            best_ticker = individual_pnl.idxmax()
+            st.metric(
+                "最大寄与",
+                f"{JP_TICKER_NAMES.get(best_ticker, best_ticker)}",
+                f"{individual_pnl[best_ticker] * 100:+.4f}%",
+            )
 
 
 # ===================================================================
@@ -608,3 +750,93 @@ elif page == "直近パフォーマンス":
     fig.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
+
+
+# ===================================================================
+# Page 4: US Sector Chart
+# ===================================================================
+elif page == "📈 米国セクター動向":
+    st.header("📈 米国セクター動向")
+
+    _US_NAMES = {
+        "XLB": "素材", "XLC": "通信", "XLE": "エネルギー", "XLF": "金融",
+        "XLI": "資本財", "XLK": "情報技術", "XLP": "生活必需品",
+        "XLRE": "不動産", "XLU": "公益", "XLV": "ヘルスケア", "XLY": "一般消費財",
+    }
+    _PERIOD_DAYS = {"1週間": 7, "1ヶ月": 30, "3ヶ月": 90, "6ヶ月": 180}
+    _COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
+
+    us_ohlc = load_us_ohlc()
+    _available = [t for t in _US_NAMES if (t, "Close") in us_ohlc.columns]
+
+    col_sel, col_period = st.columns([3, 1])
+    with col_sel:
+        selected_us = st.multiselect(
+            "セクターを選択（最大5本）",
+            options=_available,
+            default=["XLK", "XLF", "XLE"],
+            format_func=lambda t: f"{t}  {_US_NAMES[t]}",
+            max_selections=5,
+        )
+    with col_period:
+        period_label = st.selectbox("表示期間", list(_PERIOD_DAYS.keys()), index=1)
+
+    if not selected_us:
+        st.info("セクターを1本以上選択してください。")
+        st.stop()
+
+    # --- データ絞り込み ---
+    end_dt = us_ohlc.index.max()
+    start_dt = end_dt - pd.Timedelta(days=_PERIOD_DAYS[period_label])
+    closes = pd.DataFrame(
+        {t: us_ohlc[(t, "Close")] for t in selected_us},
+    ).loc[lambda df: df.index >= start_dt]
+
+    # --- チャート描画（期間開始=100に正規化して比較） ---
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    period_returns = {}
+    for i, ticker in enumerate(selected_us):
+        series = closes[ticker].dropna()
+        if series.empty:
+            continue
+        pct_ret = (series.iloc[-1] / series.iloc[0] - 1) * 100
+        period_returns[ticker] = pct_ret
+        norm = series / series.iloc[0] * 100
+        label = f"{ticker} {_US_NAMES[ticker]}  ({pct_ret:+.1f}%)"
+        ax.plot(norm.index, norm.values, color=_COLORS[i % len(_COLORS)],
+                linewidth=1.8, label=label)
+
+    ax.axhline(y=100, color="grey", linestyle="--", linewidth=0.7, alpha=0.5)
+    ax.set_ylabel(f"基準値（{period_label}開始=100）")
+    ax.legend(frameon=False, fontsize=9, loc="upper left")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    fig.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+
+    # --- 期間リターン サマリーテーブル ---
+    st.subheader("期間リターン まとめ")
+    ret_rows = sorted(period_returns.items(), key=lambda x: x[1], reverse=True)
+    ret_df = pd.DataFrame([
+        {
+            "ティッカー": t,
+            "セクター": _US_NAMES[t],
+            "期間リターン": f"{r:+.2f}%",
+        }
+        for t, r in ret_rows
+    ])
+
+    def _style_ret(val):
+        if isinstance(val, str) and val.startswith("+"):
+            return "color: #2ca02c; font-weight: bold"
+        elif isinstance(val, str) and val.startswith("-"):
+            return "color: #d62728; font-weight: bold"
+        return ""
+
+    st.dataframe(
+        ret_df.style.map(_style_ret, subset=["期間リターン"]),
+        hide_index=True,
+        use_container_width=True,
+    )

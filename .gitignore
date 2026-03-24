@@ -1,2 +1,9 @@
 __pycache__/
 *.py[cod]
+logs/
+stdout.txt
+stderr.txt
+bat_test.txt
+.env
+*.egg-info/
+.venv/
