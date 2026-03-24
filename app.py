@@ -13,13 +13,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 
-import matplotlib.font_manager as _fm
-_JP_FONT_CANDIDATES = ["Meiryo", "MS Gothic", "MS PGothic", "Yu Gothic", "IPAexGothic"]
-_available_fonts = {f.name for f in _fm.fontManager.ttflist}
-for _f in _JP_FONT_CANDIDATES:
-    if _f in _available_fonts:
-        matplotlib.rcParams["font.family"] = _f
-        break
+import japanize_matplotlib  # noqa: F401  sets Japanese font globally
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -838,5 +832,5 @@ elif page == "📈 米国セクター動向":
     st.dataframe(
         ret_df.style.map(_style_ret, subset=["期間リターン"]),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
