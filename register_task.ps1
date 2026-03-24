@@ -7,7 +7,7 @@
 $TaskName    = "SectorLeadLag_DailyUpdate"
 $BatFile     = "C:\trade-tools\sector-leadlag\run_update.bat"
 $WorkDir     = "C:\trade-tools\sector-leadlag"
-$RunTime     = "06:30"
+$RunTime     = "08:00"
 
 # --- アクション: cmd.exe 経由でバッチファイルを実行 ---
 # (バッチファイルを直接 Execute に指定するとウィンドウが閉じずログが残らない場合があるため cmd /c を使用)
@@ -16,19 +16,22 @@ $Action = New-ScheduledTaskAction `
     -Argument "/c `"$BatFile`" >> `"$WorkDir\logs\scheduler.log`" 2>&1" `
     -WorkingDirectory $WorkDir
 
-# --- トリガー: 月〜金 06:30 ---
+# --- トリガー: 月〜金 08:00 ---
 $Trigger = New-ScheduledTaskTrigger `
     -Weekly `
     -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday `
     -At $RunTime
 
 # --- 設定 ---
+# -WakeToRun: スリープ中でも起こして実行
+# -StartWhenAvailable: 起動遅延時に次回起動時に実行
+# -ExecutionTimeLimit: 最大1時間で強制終了
+# -MultipleInstances IgnoreNew: 二重起動防止
 $Settings = New-ScheduledTaskSettingsSet `
-    -WakeToRun `                          # スリープ中でも起こして実行
-    -StartWhenAvailable `                 # 起動遅延時に次回起動時に実行
-    -ExecutionTimeLimit (New-TimeSpan -Hours 1) `   # 最大1時間で強制終了
-    -MultipleInstances IgnoreNew `        # 二重起動防止
-    -Priority 7                           # 通常優先度
+    -WakeToRun `
+    -StartWhenAvailable `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
+    -MultipleInstances IgnoreNew
 
 # --- 登録（既存タスクは上書き） ---
 Register-ScheduledTask `
