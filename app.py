@@ -13,9 +13,8 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 
-import japanize_matplotlib  # noqa: F401  sets Japanese font globally
-
 import matplotlib.pyplot as plt
+plt.rcParams['font.family'] = 'DejaVu Sans'
 import numpy as np
 import pandas as pd
 import streamlit as st
