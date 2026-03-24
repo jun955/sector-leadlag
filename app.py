@@ -14,7 +14,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
-plt.rcParams['font.family'] = 'DejaVu Sans'
+plt.rcParams['font.family'] = 'Noto Sans CJK JP'
 import numpy as np
 import pandas as pd
 import streamlit as st
